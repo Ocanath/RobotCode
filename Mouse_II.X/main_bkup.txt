@@ -1,0 +1,782 @@
+
+//
+//                 Mouse's Control Program
+//
+#include "userLib.h"
+#include "picConfig.h"
+#include "a2d.h"
+
+#include "Mouse_Control_Functions.h"
+#include "Mouse_Math.h"
+
+#define TR_CONST 511000
+
+#define MOTION_CTL_MODE 0
+
+
+INT16 initialize()      // establish PBCLK, init timer / peripheral devices
+{
+
+   picInit(SYSCLK);          
+
+// setup io ports to control led for debugging purposes
+
+   DDPCONbits.JTAGEN = 0;   // this will disable JTAG port
+   
+	// set PIC pin mode: examples
+
+//    TRISA = 0;         // all PORTA as output (0) or input (1)
+//    _TRISA1 = 0;       // PORTA bit 1 as output (0) or input (1)
+//    TRISB = 0;         // all PORTB as output (0) or input (1)
+//    TRISC = 0;         // all PORTC as output (0) or input (1)
+//    TRISD = 0;         // all PORTD as output (0) or input (1)
+//   mPORTESetPinsDigitalOut(BIT_0 | BIT_1 | BIT_2 | BIT_3 | BIT_4 | BIT_5 | BIT_6 | BIT_7);
+//   LATE = 0;				// Sets ALL port E bits = 0 
+//   LATE = 0xFF;			// Sets All port E bits = 1
+//   PORTEbits.RE0 = 1;     // Sets Port E Bit 0 = 1
+//	 _LATE0 = 1;			// Also Sets Port E Bit 0 = 1 // alternative syntax
+
+
+
+
+   	TRISE = 0;         // all PORTE as output: for LEDss
+	//TRIS = 0;
+
+
+
+
+   // select the desired options by deleting the // at start-of-line
+
+   // timers for delay functions															IMPORTANT!!!!
+
+   delayT1_init();      // enables use of Timer1 for delay functions
+//   delayT2_init();      // enables use of Timer2 for delay functions
+//   delayT3_init();      // enables use of Timer3 for delay functions
+//   delayT4_init();      // enables use of Timer4 for delay functions
+//   delayT5_init();      // enables use of Timer5 for delay functions
+
+  	// timers for timeElapsed functions
+	
+//	OpenTimer23(T2_ON | T2_SOURCE_INT | T23_PRESCALER | T2_32BIT_MODE_ON, 0xFFFFFFFF);
+	OpenTimer45(T4_ON | T4_SOURCE_INT | T45_PRESCALER | T4_32BIT_MODE_ON, 0xFFFFFFFF);
+
+	// UART device selection
+	// Param1 = port #: UART1A, UART2A, UART3A, etc
+	// Param2 = data rate (bps) data
+	// Param3 = PBCLK
+
+
+	_TRISD3 = 0;						// set  TX pin as output
+	_TRISD2 = 1;						// set RX pin as input
+	//uart_init(UART1, 9600, PBCLK);
+    U1BRG = ((PBCLK / 9600)/16)-1;
+    U1MODE |= 0x8000;
+    U1STA |= 0x400;
+    U1STA |= 0x1000;
+    
+    
+    
+
+    
+    
+//230400
+    
+	_TRISF5 = 0;						// set UART3A TX pin as output
+	_TRISF4 = 1;						// set RX pin as input
+	uart_init(UART2, 9600, PBCLK);		
+
+
+
+
+//this is for board 3B
+
+	//setbuf() specifies no stdout buffering: all chars output immediately
+
+	setbuf(stdout,NULL);            // specify no buffering on output  
+
+//buffer area memory that holds content
+
+// PWM
+/*
+	pwm1Handle = PWMOpen( 1, 2, T2_PS_1_32, 0xC000 );		// PWM open port OC1, Timer 2
+	if(pwm1Handle == -1)
+		return(-1);
+*/
+
+
+
+
+// analog to digital inputs
+
+	A2D_init(0xFF);			// parm = ANx bits to enable as inputs 							TURN BACK ON
+
+	return(0);
+
+	INT32 rc; 
+	
+	
+}
+ 
+void checkrc(int rc)			//check function return
+{	
+	if(!rc) 
+		return;
+	LATE = (rc & 0xFF);
+	while(1)
+	{}
+}
+
+
+
+int string_to_num(char * instring, int len)
+{
+	int st_base = 0;
+	if (instring[0] == '-')
+		st_base = 1;
+
+	int retval = 0;
+	int i;
+	int tenpow = 1;
+	for (i = len - 1; i >= st_base; i--)
+	{
+		if (instring[i] >= '0' && instring[i] <= '9')
+		{
+			retval += (instring[i] - '0')*tenpow;
+			tenpow *= 10;
+		}
+	}
+	if (st_base == 0)
+		return retval;
+	else
+		return -retval;
+
+}
+
+void async_get_byte( char * inbuf, int * bufidx, unsigned char * RdyFlag, unsigned char * FailFlag)
+{
+    char UART_rd;
+    int i;
+    
+    *RdyFlag = 0;
+    for(i = 0; i < 10; i++)
+    {
+        if(!DataRdyUART1())
+            *RdyFlag = 0;
+        else
+        {
+            *RdyFlag = 1;
+            break;
+        }
+    }
+    if(*RdyFlag && !(*FailFlag))
+    {
+        UART_rd = ReadUART1();
+        inbuf[(*bufidx)] = UART_rd;
+        (*bufidx)++;
+                
+    }
+    else if (*RdyFlag == 0)
+        *FailFlag = 1;
+         
+      
+}
+
+//char inbuf[25];
+void Get_input(char * inbuf, char arg, char * failed)
+{            
+    WriteUART1(arg);
+    while(BusyUART1());
+    int numbytes = 4;
+    int i;
+    for(i = 0; i < numbytes; i++)
+    {
+        inbuf[i] = 0;
+        int j;
+        for(j = 0; j < 5; j++)
+        {
+            if(U1STA & 1 != 0)
+                break;
+        }
+        if(j == 5)
+            *failed = 1;
+        inbuf[i] = (UINT8)U1RXREG;                 
+
+    } 
+}
+
+
+
+int main()
+{ 
+    
+   
+    
+	int	rc;				// function return code
+	rc = initialize();			// set up hardware
+	checkrc(rc);			//check if successful hardwarecheck
+    
+    
+	pin_setup();			//see Twitchy_Functions.c!!! this sets the servo channels to outputs
+   
+    
+	LATE = 5;
+	delayT1_ms(1000);
+	LATE = 2;
+	delayT1_ms(1000);
+	printf("Hello, World!\r");
+	printf("I AM MOUSADILLO\r");
+	//PORTSetPinsDigitalIn( IOPORT_F, BIT_3);
+	LATE = 5;
+
+    
+    
+    
+   
+
+
+    
+//    int timearr[24];
+//	timearr[0] = 2300;	timearr[1] = 500;	timearr[2] = 1500;	timearr[3] = 440;	timearr[4] = 660;	timearr[5] = 500;	timearr[6] = 1230;
+//	timearr[7] = 500;	timearr[8] = 1500;	timearr[9] = 2400;	timearr[10] = 1400;	timearr[11] = 1100;	timearr[12] = 401;	timearr[13] = 402;
+//	timearr[14] = 401;	timearr[15] = 430;	timearr[16] = 590;	timearr[17] = 591;	timearr[18] = 400;	timearr[19] = 405;	timearr[20] = 412;
+//	timearr[21] = 416;	timearr[22] = 522;	timearr[23] = 1105;	timearr[24] = 0;
+//
+//    int shoulder[2];
+//	int upper_arm[2];
+//	int elbow_upper[2];
+//	int elbow_lower[2];
+//	int wrist[2];
+//	int blade[2];
+//	int waist;
+//	int neck[2];
+//    int thumb[2];
+//    int fingers[2];
+    
+    MouseMotors M;
+	M.timearr[0] = 2300;	M.timearr[1] = 500;	M.timearr[2] = 1500;	M.timearr[3] = 440;	M.timearr[4] = 660;	M.timearr[5] = 500;	M.timearr[6] = 1230;
+	M.timearr[7] = 500;	M.timearr[8] = 1500;	M.timearr[9] = 2400;	M.timearr[10] = 1400;	M.timearr[11] = 1100;	M.timearr[12] = 401;	M.timearr[13] = 402;
+	M.timearr[14] = 401;	M.timearr[15] = 430;	M.timearr[16] = 590;	M.timearr[17] = 591;	M.timearr[18] = 400;	M.timearr[19] = 405;	M.timearr[20] = 412;
+	M.timearr[21] = 416;	M.timearr[22] = 522;	M.timearr[23] = 1105;	M.timearr[24] = 0;
+    
+    
+	
+    /*shoulder[0] = 1500;
+	shoulder[1] = 1501;
+	upper_arm[0] = 1502;
+	upper_arm[1] = 1503;
+	elbow_upper[0] = 1504;
+	elbow_upper[1] = 1505;
+	elbow_lower[0] = 1506;
+	elbow_lower[1] = 1507;
+	wrist[0] = 1508;
+	wrist[1] = 1509;
+	blade[0] = 1510;
+	blade[1] = 1511;
+	waist = 1512;
+	neck[0] = 1513;
+	neck[1] = 1514;
+    */
+    
+    M.thumb[0] = 1500;
+    M.thumb[1] = 1500;
+    M.fingers[0] = 1500;
+    M.fingers[1] = 1500;
+    starting_position(&M);
+    
+    
+    M.neck[0] = 1000-200;
+    M.neck[1] = 1000;
+    move_servos(&M, 15);
+    M.neck[1] = 800;
+    move_servos(&M, 15);
+    M.neck[0] = 1500+200;    
+    move_servos(&M, 15);
+    M.neck[1] = 1000;
+    move_servos(&M, 15);
+    M.neck[0] = 1382; M.neck[1] = 788;
+    move_servos(&M, 15);
+   
+    starting_position(&M);
+       
+    
+   
+	////////////////////////////////////////////////////////////////////////////////////////left arm
+	double Lm_prev[6];
+	Lm_prev[1] = -1.57079632679; Lm_prev[2] = 1.57079632679;  Lm_prev[3] = 1.57079632679;  Lm_prev[4] = 1.57079632679;  Lm_prev[5] = 0.0;
+	
+	double Lm_theta[6];
+	Lm_theta[1] = -1.57079632679; Lm_theta[2] = 1.57079632679;  Lm_theta[3] = 1.57079632679;  Lm_theta[4] = 1.57079632679;  Lm_theta[5] = 0.0;
+
+
+	double Lm_a1 = 11.471; double Lm_a2 = 10.16; double Lm_a3 = 10.59; double Lm_a4 = 5.99;
+	double Lm_d1 = 14.564; double Lm_d2 = 11.246; double Lm_d3 = 98.709; double Lm_d4 = 7.08; double Lm_d5 = 51.135;
+
+
+	double LHW_0[4][4];
+	LHW_0[0][0] = 1.0;		LHW_0[0][1] = 0;			LHW_0[0][2] = 0;		LHW_0[0][3] = 0;
+	LHW_0[1][0] = 0;		LHW_0[1][1] = 0;			LHW_0[1][2] = 1.0;		LHW_0[1][3] = 25.0;
+	LHW_0[2][0] = 0;		LHW_0[2][1] = -1.0;			LHW_0[2][2] = 0;		LHW_0[2][3] = 100.;
+	LHW_0[3][0] = 0;		LHW_0[3][1] = 0;			LHW_0[3][2] = 0;		LHW_0[3][3] = 1.0;
+	
+	double LH0_W[4][4];
+	HT_Inverse(LHW_0, LH0_W);
+
+
+
+	double LH0_1[4][4];
+	LH0_1[0][0] = cos(Lm_theta[1]);		LH0_1[0][1] = 0;			LH0_1[0][2] = -sin(Lm_theta[1]);		LH0_1[0][3] = Lm_a1*cos(Lm_theta[1]);
+	LH0_1[1][0] = sin(Lm_theta[1]);		LH0_1[1][1] = 0;			LH0_1[1][2] = cos(Lm_theta[1]);		LH0_1[1][3] = Lm_a1*sin(Lm_theta[1]);
+	LH0_1[2][0] = 0;						LH0_1[2][1] = -1.0;		LH0_1[2][2] = 0;						LH0_1[2][3] = Lm_d1;
+	LH0_1[3][0] = 0;						LH0_1[3][1] = 0;			LH0_1[3][2] = 0;						LH0_1[3][3] = 1.0;
+	double LH1_2[4][4];
+	LH1_2[0][0] = cos(Lm_theta[2]);		LH1_2[0][1] = 0;			LH1_2[0][2] = -sin(Lm_theta[2]);		LH1_2[0][3] = Lm_a2*cos(Lm_theta[2]);
+	LH1_2[1][0] = sin(Lm_theta[2]);		LH1_2[1][1] = 0;			LH1_2[1][2] = cos(Lm_theta[2]);		LH1_2[1][3] = Lm_a2*sin(Lm_theta[2]);
+	LH1_2[2][0] = 0;						LH1_2[2][1] = -1.0;		LH1_2[2][2] = 0;						LH1_2[2][3] = Lm_d2;
+	LH1_2[3][0] = 0;						LH1_2[3][1] = 0;			LH1_2[3][2] = 0;						LH1_2[3][3] = 1.0;
+	double LH2_3[4][4];
+	LH2_3[0][0] = cos(Lm_theta[3]);		LH2_3[0][1] = 0;			LH2_3[0][2] = -sin(Lm_theta[3]);		LH2_3[0][3] = Lm_a3*cos(Lm_theta[3]);
+	LH2_3[1][0] = sin(Lm_theta[3]);		LH2_3[1][1] = 0;			LH2_3[1][2] = cos(Lm_theta[3]);		LH2_3[1][3] = Lm_a3*sin(Lm_theta[3]);
+	LH2_3[2][0] = 0;						LH2_3[2][1] = -1.0;		LH2_3[2][2] = 0;						LH2_3[2][3] = Lm_d3;
+	LH2_3[3][0] = 0;						LH2_3[3][1] = 0;			LH2_3[3][2] = 0;						LH2_3[3][3] = 1.0;
+	double LH3_4[4][4];
+	LH3_4[0][0] = cos(Lm_theta[4]);		LH3_4[0][1] = 0;			LH3_4[0][2] = -sin(Lm_theta[4]);		LH3_4[0][3] = Lm_a4*cos(Lm_theta[4]);
+	LH3_4[1][0] = sin(Lm_theta[4]);		LH3_4[1][1] = 0;			LH3_4[1][2] = cos(Lm_theta[4]);		LH3_4[1][3] = Lm_a4*sin(Lm_theta[4]);
+	LH3_4[2][0] = 0;						LH3_4[2][1] = -1.0;		LH3_4[2][2] = 0;						LH3_4[2][3] = Lm_d4;
+	LH3_4[3][0] = 0;						LH3_4[3][1] = 0;			LH3_4[3][2] = 0;						LH3_4[3][3] = 1.0;
+	double LH4_5[4][4];
+	LH4_5[0][0] = cos(Lm_theta[5]);		LH4_5[0][1] = -sin(Lm_theta[5]);		LH4_5[0][2] = 0;				LH4_5[0][3] = 0;
+	LH4_5[1][0] = sin(Lm_theta[5]);		LH4_5[1][1] = cos(Lm_theta[5]);		LH4_5[1][2] = 0;				LH4_5[1][3] = 0;
+	LH4_5[2][0] = 0;						LH4_5[2][1] = 0;						LH4_5[2][2] = 1.0;			LH4_5[2][3] = Lm_d5;
+	LH4_5[3][0] = 0;						LH4_5[3][1] = 0;						LH4_5[3][2] = 0;				LH4_5[3][3] = 1.0;
+	/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////left arm end
+
+	////////////////////////////////////////////////////////////////////////////////////////right arm
+	double Rm_prev[6];
+	Rm_prev[1] = 1.57079632679; Rm_prev[2] = -1.57079632679;  Rm_prev[3] = -1.57079632679;  Rm_prev[4] = -1.57079632679;  Rm_prev[5] = 0.0;
+
+	double Rm_theta[6];
+	Rm_theta[1] = 1.57079632679; Rm_theta[2] = -1.57079632679;  Rm_theta[3] = -1.57079632679;  Rm_theta[4] = -1.57079632679;  Rm_theta[5] = 0.0;
+
+    double Rm_a1 = 11.471; double Rm_a2 = 10.16; double Rm_a3 = 10.59; double Rm_a4 = 5.99;
+	double Rm_d1 = 14.564; double Rm_d2 = 11.246; double Rm_d3 = 98.709; double Rm_d4 = 7.08; double Rm_d5 = 51.135;
+
+	double RHW_0[4][4];
+	RHW_0[0][0] = 1.0;		RHW_0[0][1] = 0;			RHW_0[0][2] = 0;		RHW_0[0][3] = 0;
+	RHW_0[1][0] = 0;		RHW_0[1][1] = 0;			RHW_0[1][2] = -1.0;		RHW_0[1][3] = -25.0;
+	RHW_0[2][0] = 0;		RHW_0[2][1] = 1.0;			RHW_0[2][2] = 0;		RHW_0[2][3] = 100.0;
+	RHW_0[3][0] = 0;		RHW_0[3][1] = 0;			RHW_0[3][2] = 0;		RHW_0[3][3] = 1.0;
+
+	double RH0_W[4][4];
+	HT_Inverse(RHW_0, RH0_W);
+
+	
+
+	double RH0_1[4][4];
+	RH0_1[0][0] = cos(Rm_theta[1]);		RH0_1[0][1] = 0;			RH0_1[0][2] = sin(Rm_theta[1]);		RH0_1[0][3] = Rm_a1*cos(Rm_theta[1]);
+	RH0_1[1][0] = sin(Rm_theta[1]);		RH0_1[1][1] = 0;			RH0_1[1][2] = -cos(Rm_theta[1]);		RH0_1[1][3] = Rm_a1*sin(Rm_theta[1]);
+	RH0_1[2][0] = 0;						RH0_1[2][1] = 1.0;		RH0_1[2][2] = 0;						RH0_1[2][3] = Rm_d1;
+	RH0_1[3][0] = 0;						RH0_1[3][1] = 0;			RH0_1[3][2] = 0;						RH0_1[3][3] = 1.0;
+	double RH1_2[4][4];
+	RH1_2[0][0] = cos(Rm_theta[2]);		RH1_2[0][1] = 0;			RH1_2[0][2] = sin(Rm_theta[2]);		RH1_2[0][3] = Rm_a2*cos(Rm_theta[2]);
+	RH1_2[1][0] = sin(Rm_theta[2]);		RH1_2[1][1] = 0;			RH1_2[1][2] = -cos(Rm_theta[2]);		RH1_2[1][3] = Rm_a2*sin(Rm_theta[2]);
+	RH1_2[2][0] = 0;						RH1_2[2][1] = 1.0;		RH1_2[2][2] = 0;						RH1_2[2][3] = Rm_d2;
+	RH1_2[3][0] = 0;						RH1_2[3][1] = 0;			RH1_2[3][2] = 0;						RH1_2[3][3] = 1.0;
+	double RH2_3[4][4];
+	RH2_3[0][0] = cos(Rm_theta[3]);		RH2_3[0][1] = 0;			RH2_3[0][2] = sin(Rm_theta[3]);		RH2_3[0][3] = Rm_a3*cos(Rm_theta[3]);
+	RH2_3[1][0] = sin(Rm_theta[3]);		RH2_3[1][1] = 0;			RH2_3[1][2] = -cos(Rm_theta[3]);		RH2_3[1][3] = Rm_a3*sin(Rm_theta[3]);
+	RH2_3[2][0] = 0;						RH2_3[2][1] = 1.0;		RH2_3[2][2] = 0;						RH2_3[2][3] = Rm_d3;
+	RH2_3[3][0] = 0;						RH2_3[3][1] = 0;			RH2_3[3][2] = 0;						RH2_3[3][3] = 1.0;
+	double RH3_4[4][4];
+	RH3_4[0][0] = cos(Rm_theta[4]);		RH3_4[0][1] = 0;			RH3_4[0][2] = sin(Rm_theta[4]);		RH3_4[0][3] = Rm_a4*cos(Rm_theta[4]);
+	RH3_4[1][0] = sin(Rm_theta[4]);		RH3_4[1][1] = 0;			RH3_4[1][2] = -cos(Rm_theta[4]);		RH3_4[1][3] = Rm_a4*sin(Rm_theta[4]);
+	RH3_4[2][0] = 0;						RH3_4[2][1] = 1.0;		RH3_4[2][2] = 0;						RH3_4[2][3] = Rm_d4;
+	RH3_4[3][0] = 0;						RH3_4[3][1] = 0;			RH3_4[3][2] = 0;						RH3_4[3][3] = 1.0;
+	double RH4_5[4][4];
+	RH4_5[0][0] = cos(Rm_theta[5]);		RH4_5[0][1] = -sin(Rm_theta[5]);			RH4_5[0][2] = 0;				RH4_5[0][3] = 0;
+	RH4_5[1][0] = sin(Rm_theta[5]);		RH4_5[1][1] = cos(Rm_theta[5]);				RH4_5[1][2] = 0;				RH4_5[1][3] = 0;
+	RH4_5[2][0] = 0;						RH4_5[2][1] = 0;						RH4_5[2][2] = 1.0;				RH4_5[2][3] = Rm_d5;
+	RH4_5[3][0] = 0;						RH4_5[3][1] = 0;						RH4_5[3][2] = 0;				RH4_5[3][3] = 1;
+	/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////right arm end
+
+
+	
+	double RM_xpos = 50.0; double RM_ypos = -50.0; double RM_zpos = 50.0;
+	double RM_xOrient = 0.0; double RM_yOrient = 0.0; double RM_zOrient = 0.0;
+
+
+	double LM_xpos = 50.0; double LM_ypos = 50.0; double LM_zpos = 50.0;      //in the zero frame
+	double LM_xOrient = 0.0; double LM_yOrient = 0.0; double LM_zOrient = 0.0;
+
+
+
+    
+    
+    
+    
+    
+    double TH_neck[2]; double TH_waist; 
+    Lm_theta[1] = -2.270796;
+    Rm_theta[1] = 2.270796;
+    
+    Lm_theta[2] = 2.87;
+    Rm_theta[2] = -2.87;
+    
+    Lm_theta[3] = .97;
+    Rm_theta[3] = -.97;
+    
+    Lm_theta[4] = 1.5707;
+    Rm_theta[4] = -1.5707;
+    
+    Lm_theta[5] = -0.230700;
+    Rm_theta[5] = -0.329300;
+    
+    Radians_To_Encoder_Pos(Lm_theta, Rm_theta, TH_neck, TH_waist, &M);
+       
+   
+    
+    
+    
+    
+    unsigned char right_blade_extend = 0;
+    unsigned char left_blade_extend = 0;
+    
+    unsigned int time = 0;
+    char ctl_val = INTERNAL_CONTROL;
+    M.neck[0] = 1382; M.neck[1] = 788;
+    
+    while(1)
+    {
+       // Keyboard_Control(timearr, shoulder, upper_arm, elbow_upper,  elbow_lower, wrist, blade, &waist, neck, waypoints, 0, 10);
+        while(!DataRdyUART2())
+        {
+            time ++;
+            
+
+            INT16 LVxR = 0; INT16 LVyR = 0; INT16 LVzR = 0;
+            INT16 RVxR = 0; INT16 RVyR = 0; INT16 RVzR = 0;
+            
+            
+            UINT8 inbufL[4];
+            UINT8 inbufR[4];
+            char failedL = 1;
+            char failedR = 0;
+            Get_input(inbufR, 'R', &failedR);            
+//            Get_input(inbufL, 'L', &failedL);            
+            if(U1STA & 0x2 != 0)
+                U1STA &= (~0x2);            
+
+            if(failedR == 0)
+            {                
+                RVxR |= (((inbufR[0] & 0xff) | ((inbufR[3] & 0x3) << 8)) & 0x3ff);
+                if ( (RVxR & 0x200) != 0)
+                    RVxR = -1024+(RVxR);
+
+                RVyR |= (((inbufR[1] & 0xff) | (((inbufR[3] >> 2) & 0x3) << 8)) & 0x03ff);
+                if ((RVyR & 0x200) != 0)
+                    RVyR = -1024 + (RVyR);
+             
+                RVzR |= (((inbufR[2] & 0xff) | (((inbufR[3] >> 4) & 0x3) << 8)) & 0x03ff);
+                if ((RVzR & 0x200) != 0)
+                    RVzR = -1024 + (RVzR);
+            }
+            if(failedL == 0)
+            {
+                LVxR |= (((inbufL[0] & 0xff) | ((inbufL[3] & 0x3) << 8)) & 0x3ff);
+                if ( (LVxR & 0x200) != 0)
+                    LVxR = -1024+(LVxR);
+
+                LVyR |= (((inbufL[1] & 0xff) | (((inbufL[3] >> 2) & 0x3) << 8)) & 0x03ff);
+                if ((LVyR & 0x200) != 0)
+                    LVyR = -1024 + (LVyR);
+             
+                LVzR |= (((inbufL[2] & 0xff) | (((inbufL[3] >> 4) & 0x3) << 8)) & 0x03ff);
+                if ((LVzR & 0x200) != 0)
+                    LVzR = -1024 + (LVzR);
+
+            }            
+//            if(failedL == 0 && failedR == 1)
+//                printf("lx: %d ly: %d lz: %d\r", LVxR, LVyR, LVzR);
+//            else if(failedR == 0 && failedL == 1)
+//                printf("rx: %d ry: %d rz: %d\r", RVxR, RVyR, RVzR);
+            //8byte seems pretty decent. occasionally it passes with incorrect values (0) but this appears very infrequent (i've only noticed it once on startup).
+            
+            
+                      
+            
+            Limit_Left_Arm_Joints(Lm_theta);
+            Limit_Right_Arm_Joints(Rm_theta);
+            ////////////////////////////////////////////LEFT ARM IK
+            double LH0_2[4][4]; double LH0_3[4][4]; double LH0_4[4][4]; double LH0_5[4][4];
+
+            Mouse_Left_Arm_Forward_Kinematics(Lm_theta, LH0_1, LH1_2, LH2_3, LH3_4, LH4_5, Lm_a1, Lm_a2, Lm_a3, Lm_a4, LH0_2, LH0_3, LH0_4, LH0_5);
+
+            double LM_J[6][5]; //six rows five cols
+            double TLM_J[5][6];
+            double LXV, LYV, LZV, LXROTV, LYROTV, LZROTV;
+            Mouse_Arm_Inverse_Kinematics(LM_xpos, LM_ypos, LM_zpos, LM_xOrient, LM_yOrient, LM_zOrient,
+                Lm_theta, Lm_prev, LH0_1, LH0_2, LH0_3, LH0_4, LH0_5,
+                LM_J, TLM_J,
+                &LXV, &LYV, &LZV, &LXROTV, &LYROTV, &LZROTV, .00002);
+
+            if (failedL == 0 && MOTION_CTL_MODE == 0)// && ts < 1.3)
+            {
+                LXV = (double)LVxR / (double)TR_CONST;
+                LYV = (double)LVyR / (double)TR_CONST;
+                LZV = (double)LVzR / (double)TR_CONST;
+                
+            }
+            
+            int i;
+            for (i = 1; i <= 5; i++)
+            {
+                Lm_theta[i] += TLM_J[i - 1][0] * LXV + TLM_J[i - 1][1] * LYV + TLM_J[i - 1][2] * LZV + TLM_J[i-1][3]*LXROTV + TLM_J[i-1][4]*LYROTV + TLM_J[i-1][5] * LZROTV;	// + LTLansp_J[0][3] * LxLot_des + ...
+                Lm_prev[i] = Lm_theta[i];
+            }
+
+            /////////////////////////////////////////////////END OF IK FOR LEFT
+
+            double RH0_2[4][4]; double RH0_3[4][4]; double RH0_4[4][4]; double RH0_5[4][4];
+
+            Mouse_Right_Arm_Forward_Kinematics(Rm_theta, RH0_1, RH1_2, RH2_3, RH3_4, RH4_5, Rm_a1, Rm_a2, Rm_a3, Rm_a4, RH0_2, RH0_3, RH0_4, RH0_5);
+
+            double RM_J[6][5]; //six rows five cols
+            double TRM_J[5][6];
+            double RXV, RYV, RZV, RXROTV, RYROTV, RZROTV;
+            Mouse_Arm_Inverse_Kinematics(RM_xpos, RM_ypos, RM_zpos, RM_xOrient, RM_yOrient, RM_zOrient, 
+                                            Rm_theta, Rm_prev, RH0_1, RH0_2, RH0_3, RH0_4, RH0_5, 
+                                            RM_J, TRM_J, 
+                                            &RXV, &RYV, &RZV, &RXROTV, &RYROTV, &RZROTV, .00002);
+
+            if (failedR == 0 && MOTION_CTL_MODE == 0 )// && ts < 1.3)
+            {
+                RXV = (double)RVxR / (double)TR_CONST;
+                RYV = (double)RVyR / (double)TR_CONST;
+                RZV = (double)RVzR / (double)TR_CONST;
+                RZV = 0;
+                if(Rm_theta[4] <= -1.677425)
+                    Rm_theta[4] = -1.677425;
+                if(Rm_theta[1] >= 3.563365)
+                    Rm_theta[1] = 3.563365;
+                else if(Rm_theta[1] <= 2.206263)
+                    Rm_theta[1] = 2.206263;          
+                
+            }
+
+            
+            for (i = 1; i <= 5; i++)
+            {
+                Rm_theta[i] += TRM_J[i - 1][0] * RXV + TRM_J[i - 1][1] * RYV + TRM_J[i - 1][2] * RZV + TRM_J[i-1][3]*RXROTV + TRM_J[i-1][4]*RYROTV + TRM_J[i-1][5]*RZROTV;	// + RTransp_J[0][3] * Rxrot_des + ...
+                Rm_prev[i] = Rm_theta[i];
+            }
+            
+            //printf("L1: %f L2: %f\n", Lm_theta[1], Lm_theta[2]);
+            //Radians_To_Encoder_Pos(double * Lm_theta, double * Rm_theta, double * TH_neck, double TH_waist, int * s, int * u_a, int * el_u, int * el_low, int * w_r, int * waist, int * neck)
+            Radians_To_Encoder_Pos(Lm_theta, Rm_theta, TH_neck, TH_waist, &M);
+
+            move_servos_IK_delay(&M, 1, 10);
+        
+            //function to update the blades based on user input
+            drive_blades(&M, right_blade_extend, left_blade_extend);
+            //startup animation.
+            Startup_Animation(time, Lm_theta, Rm_theta,
+                                &LM_xpos, &LM_ypos, &LM_zpos,
+                                    &RM_xpos, &RM_ypos, &RM_zpos,
+                                        &left_blade_extend, &right_blade_extend, &ctl_val, &M);
+            
+            /////////////////////////////////////////////////////////////////////////////////
+            
+            
+            //REMOVE thEse PRINt STATEMENTS!!! THEY SLOW DOWN THE IK!!
+            //////////////////////
+            ////////////////////RM
+//        if(  ((LH0_5[0][3] - LM_xpos) > .1 || (LH0_5[0][3] - LM_xpos) < -.1)   )
+//            printf("L: (%f, %f, %f)\r", LH0_5[0][3], LH0_5[1][3], LH0_5[2][3]);
+//        if(   ((RH0_5[0][3] - RM_xpos) > .1 || (RH0_5[0][3] - RM_xpos) < -.1)  )
+//            printf("R: (%f, %f, %f)\r", RH0_5[0][3], RH0_5[1][3], RH0_5[2][3]);
+            ////////////////////
+            ////////////////////
+            
+        }
+
+        
+        //end of IK loop. Enters below code
+        //whenever you receive a byte over UART2, the terminal UART.
+        
+        
+        
+        char buf_string[20];
+        int string_idx = 0;
+        double Xin = 11.11, Yin = 12.12, Zin = 7.77;    
+        char UART_rd = ReadUART2();
+        if(UART_rd == 'p' && ctl_val == USER_CONTROL)
+        {
+            
+            printf("\renter X:\r");
+            unsigned char exit_flag = 0;
+            string_idx = 0;
+            while(!exit_flag)
+            {
+              while(!DataRdyUART2())
+              {
+                  move_servos(&M, 1);
+              }
+              UART_rd = ReadUART2();
+              if(UART_rd == 0xD)
+                  exit_flag = 1;
+              else if(UART_rd == '-')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }
+              else if (UART_rd >= '0' && UART_rd <= '9')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }              
+            }
+            if(string_idx > 0)
+                Xin = string_to_num(buf_string, string_idx);     //load into x
+    
+            printf("enter Y:\r");
+            exit_flag = 0;
+            string_idx = 0;
+            while(!exit_flag)
+            {
+              while(!DataRdyUART2())
+              {
+                  move_servos(&M, 1);
+              }
+              UART_rd = ReadUART2();
+              if(UART_rd == 0xD)
+                  exit_flag = 1;
+              else if(UART_rd == '-')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }
+              else if (UART_rd >= '0' && UART_rd <= '9')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }              
+            }
+            if(string_idx > 0)
+                Yin = string_to_num(buf_string, string_idx);     //load into x
+               
+            printf("enter Z:\r");
+            exit_flag = 0;
+            string_idx = 0;
+            while(!exit_flag)
+            {
+              while(!DataRdyUART2())
+              {
+                  move_servos(&M, 1);
+              }
+              UART_rd = ReadUART2();
+              if(UART_rd == 0xD)
+                  exit_flag = 1;
+              else if(UART_rd == '-')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }
+              else if (UART_rd >= '0' && UART_rd <= '9')
+              {
+                  buf_string[string_idx] = UART_rd;
+                  string_idx++;
+              }              
+            }
+            if(string_idx > 0)
+                Zin = string_to_num(buf_string, string_idx);     //load into x
+           
+
+            
+            printf("enter l/r:\r");
+            exit_flag = 0;
+            string_idx = 0;
+            while(!exit_flag)
+            {
+              while(!DataRdyUART2())
+              {
+                  move_servos(&M, 1);
+              }
+              UART_rd = ReadUART2();
+              if(UART_rd == 0xD)
+                  exit_flag = 1;
+              if(UART_rd == 'l' || UART_rd == 'L')
+              {HT_Matrix_Vect_Multiply(LH0_W, Xin, Yin, Zin, &LM_xpos, &LM_ypos, &LM_zpos);}
+              else if(UART_rd == 'r' || UART_rd == 'R')
+              {HT_Matrix_Vect_Multiply(RH0_W, Xin, Yin, Zin, &RM_xpos, &RM_ypos, &RM_zpos);}
+            }
+        }
+        
+        else if (UART_rd == 'a')
+            Lm_theta[3]+=.07;
+        else if (UART_rd == 'z')
+            Lm_theta[3]-=.07;
+        else if (UART_rd == 's')
+            Rm_theta[3]-=.07;
+        else if (UART_rd == 'x')
+            Rm_theta[3] += .07;
+        
+        else if (UART_rd == 'q')
+            Lm_theta[5]+=.07;
+        else if (UART_rd == 'w')
+            Lm_theta[5]-=.07;
+        else if (UART_rd == 'e')
+            Rm_theta[5]-=.07;
+        else if (UART_rd == 'r')
+            Rm_theta[5] += .07;
+
+        else if (UART_rd == 't')
+            right_blade_extend = !right_blade_extend;
+        else if (UART_rd == 'y')
+            left_blade_extend = !left_blade_extend;
+        
+        else if (UART_rd == 'l')
+            M.neck[0] += MOUSE_NECK_STEP;
+        else if (UART_rd == 'k')
+            M.neck[1] += MOUSE_NECK_STEP;
+        else if (UART_rd == 'i')
+            M.neck[1] -= MOUSE_NECK_STEP;
+        else if (UART_rd == 'j')
+            M.neck[0] -= MOUSE_NECK_STEP;
+
+        else if (UART_rd == 'A')
+            M.thumb[0] += THUMB_STEP;
+        else if (UART_rd == 'Z')
+            M.thumb[0] -= THUMB_STEP;
+        else if (UART_rd == 'S')
+            M.thumb[1] += THUMB_STEP;
+        else if (UART_rd == 'X')
+            M.thumb[1] -= THUMB_STEP;
+
+        else if (UART_rd == 'K')
+            M.fingers[0] += FINGERS_STEP;
+        else if (UART_rd == 'M')
+            M.fingers[0] -= FINGERS_STEP;
+        else if (UART_rd == 'J')
+            M.fingers[1] += FINGERS_STEP;
+        else if (UART_rd == 'N')
+            M.fingers[1] -= FINGERS_STEP;
+
+        else if (UART_rd == 'P')
+        {
+            printf("M.fingers[0] = %d; M.fingers[1] = %d;\r", M.fingers[0], M.fingers[1]);
+            printf("M.thumb[0] = %d; M.thumb[1] = %d;\r", M.thumb[0], M.thumb[1]);
+            printf("M.neck[0] = %d; M.neck[1] = %d;\r", M.neck[0], M.neck[1]);
+            printf("M.blade[0] = %d; M.blade[1] = %d;\r", M.blade[0], M.blade[1]);
+            printf("Lm_theta[1] = %f; Rm_theta[1] = %f;\r", Lm_theta[1], Rm_theta[1]);
+            printf("Lm_theta[2] = %f; Rm_theta[2] = %f;\r", Lm_theta[2], Rm_theta[2]);
+            printf("Lm_theta[3] = %f; Rm_theta[3] = %f;\r", Lm_theta[3], Rm_theta[3]);
+            printf("Lm_theta[4] = %f; Rm_theta[4] = %f;\r", Lm_theta[4], Rm_theta[4]);
+            printf("Lm_theta[5] = %f; Rm_theta[5] = %f;\r", Lm_theta[5], Rm_theta[5]);          
+        }
+        
+
+        
+    }    
+    
+}
+
+
